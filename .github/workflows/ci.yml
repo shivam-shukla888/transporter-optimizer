@@ -11,17 +11,43 @@ permissions:
 
 jobs:
   build-and-test:
+    name: Build, Verify and Test
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: freightfox
+          POSTGRES_USER: freightfox
+          POSTGRES_PASSWORD: freightfox
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
-      - name: Check out source
+      - name: Check out source code
         uses: actions/checkout@v4
 
-      - name: Set up Java 21
+      - name: Set up Eclipse Temurin JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
 
-      - name: Build and test
-        run: mvn --batch-mode --no-transfer-progress verify
+      - name: Verify build and execute test suite
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5434
+          DB_NAME: freightfox
+          DB_USERNAME: freightfox
+          DB_PASSWORD: freightfox
+        run: mvn --batch-mode --no-transfer-progress clean verify
+
+      - name: Verify Docker build
+        run: docker build -t freightfox-optimizer:ci .
