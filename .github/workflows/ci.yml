@@ -24,10 +24,10 @@ jobs:
         ports:
           - 5434:5432
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
+          --health-cmd "pg_isready -U freightfox -d freightfox"
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
 
     steps:
       - name: Check out source code
@@ -47,6 +47,9 @@ jobs:
           DB_NAME: freightfox
           DB_USERNAME: freightfox
           DB_PASSWORD: freightfox
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5434/freightfox
+          SPRING_DATASOURCE_USERNAME: freightfox
+          SPRING_DATASOURCE_PASSWORD: freightfox
         run: mvn --batch-mode --no-transfer-progress clean verify
 
       - name: Verify Docker build

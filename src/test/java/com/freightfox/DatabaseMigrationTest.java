@@ -5,19 +5,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Migration compatibility test verifying Flyway V1 schema migration execution
+ * on an in-memory H2 database (PostgreSQL compatibility mode).
+ */
 @SpringBootTest
-@ActiveProfiles("local")
 class DatabaseMigrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @Test
-    @DisplayName("Verify that Flyway migration V1 creates all required relational tables and constraints")
+    @DisplayName("Verify that Flyway migration V1 creates all required relational tables and constraints in H2")
     void testFlywaySchemaTablesCreated() {
         Integer snapshotCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM dataset_snapshot", Integer.class);
         Integer laneCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM lane", Integer.class);
@@ -30,4 +32,3 @@ class DatabaseMigrationTest {
         assertThat(quoteCount).isNotNull().isGreaterThanOrEqualTo(0);
     }
 }
-
