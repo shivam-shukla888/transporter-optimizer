@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: freightfox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-freightfox}
+      POSTGRES_USER: ${DB_USERNAME:-freightfox}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-freightfox}
+    ports:
+      - "${DB_PORT:-5434}:5432"
+    volumes:
+      - freightfox_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-freightfox} -d ${DB_NAME:-freightfox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: freightfox-app
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-freightfox}
+      DB_USERNAME: ${DB_USERNAME:-freightfox}
+      DB_PASSWORD: ${DB_PASSWORD:-freightfox}
+      SERVER_PORT: 8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  freightfox_pgdata:

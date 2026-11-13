@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: freightfox-transporter-optimizer
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: SERVER_PORT
+        value: "8080"
+      - key: DB_HOST
+        fromDatabase:
+          name: freightfox-postgres-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: freightfox-postgres-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: freightfox-postgres-db
+          property: database
+      - key: DB_USERNAME
+        fromDatabase:
+          name: freightfox-postgres-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: freightfox-postgres-db
+          property: password
+
+databases:
+  - name: freightfox-postgres-db
+    plan: free
+    region: oregon
+    databaseName: freightfox
+    user: freightfox
