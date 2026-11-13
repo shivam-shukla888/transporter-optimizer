@@ -1,58 +1,167 @@
-# Architecture
+# Architecture & System Design
 
-## Architectural style
+## 1. Architectural Style & Design Principles
 
-A modular monolith is the deliberate choice for this assignment. The scope has two REST endpoints and one optimization capability; microservices would add deployment and operational complexity without a demonstrated need.
+The FreightFox Transporter Assignment application is engineered as a **Modular Monolith** adhering to **Clean Architecture** and **Domain-Driven Design (DDD)** principles.
 
-## Modules
+### Deliberate Architectural Decisions
+- **Single Process Modular Monolith**: Given the cohesive business boundary (transporter input ingestion and lane assignment optimization), microservices would introduce distributed latency, network unreliability, and unnecessary complexity.
+- **Strict Decoupling of Domain & Optimization**: The optimization algorithm (`com.freightfox.optimizer`) is a pure Java library with **zero** dependencies on Spring, Hibernate, JPA, SQL, or web layers. It can be compiled and verified in complete isolation.
+- **Strict Dependency Inversion**:
+  ```
+  Web / REST Controllers (API)
+             │
+             ▼
+  Application Services (Orchestration & Transactions)
+             │
+      ┌──────┴──────────────────┐
+      ▼                         ▼
+  Domain & Optimizer        Persistence Repositories (JPA & PostgreSQL)
+  (Pure Java)
+  ```
 
-- **controller** — HTTP contract, request/response mapping, status codes.
-- **service** — use-case orchestration and transaction boundaries.
-- **optimizer** — pure Java optimization logic and result reconstruction.
-- **domain** — core lane, transporter, quote and assignment concepts.
-- **repository** — persistence interfaces and database access.
-- **dto** — API request and response records.
-- **exception** — consistent error mapping.
-- **config** — application and OpenAPI configuration.
+---
 
-## Dependency direction
+## 2. Package & Module Structure
 
-HTTP/controller -> application service -> domain/optimizer and repositories.
+```
+com.freightfox
+├── FreightFoxApplication.java          # Spring Boot Main Entrypoint
+│
+├── config
+│   └── OpenApiConfig.java              # OpenAPI 3 / Swagger UI Configuration
+│
+├── common
+│   └── exception
+│       ├── GlobalExceptionHandler.java # Centralized Exception-to-HTTP Mapper
+│       ├── ErrorResponse.java          # Unified Error DTO
+│       ├── InvalidDatasetException.java
+│       ├── InfeasibleAssignmentException.java
+│       └── NoActiveDatasetException.java
+│
+├── dataset                             # Ingestion Subsystem
+│   ├── controller
+│   │   └── DatasetInputController.java # POST /api/v1/transporters/input
+│   ├── dto
+│   │   ├── DatasetInputRequest.java
+│   │   ├── DatasetInputResponse.java
+│   │   ├── LaneInputDto.java
+│   │   ├── TransporterInputDto.java
+│   │   └── LaneQuoteInputDto.java
+│   ├── entity
+│   │   ├── DatasetSnapshotEntity.java  # Snapshot root entity
+│   │   ├── LaneEntity.java             # Lane entity scoped to snapshot
+│   │   ├── TransporterEntity.java      # Transporter entity scoped to snapshot
+│   │   └── LaneQuoteEntity.java        # Quote entity scoped to lane & transporter
+│   ├── repository
+│   │   ├── DatasetSnapshotRepository.java
+│   │   ├── LaneRepository.java
+│   │   ├── TransporterRepository.java
+│   │   └── LaneQuoteRepository.java
+│   └── service
+│       └── DatasetSnapshotService.java # Transactional snapshot ingestion & activation
+│
+├── assignment                          # Optimization & Assignment Subsystem
+│   ├── controller
+│   │   └── AssignmentController.java   # POST /api/v1/transporters/assignment
+│   ├── dto
+│   │   ├── AssignmentRequestDto.java
+│   │   ├── AssignmentResponseDto.java
+│   │   └── LaneAssignmentDto.java
+│   └── service
+│       └── TransporterAssignmentService.java # Isolated snapshot read & solver invocation
+│
+└── optimizer                           # Pure Java Optimization Engine (Zero Frameworks)
+    ├── engine
+    │   └── AssignmentOptimizer.java    # Bitmask DP over lane subsets
+    └── model
+        ├── Lane.java
+        ├── Transporter.java
+        ├── LaneQuote.java
+        ├── LaneAssignment.java
+        ├── OptimizationRequest.java
+        └── OptimizationResult.java
+```
 
-The optimizer must not depend on Spring, JPA, PostgreSQL, web classes or external services. It accepts validated in-memory input and returns a deterministic result.
+---
 
-## Persistence model
+## 3. Relational Persistence Model & Snapshot Isolation
 
-Initial relational entities:
+### Database Schema (Flyway V1 Migration)
 
-- DatasetSnapshot
-- Lane
-- Transporter
-- LaneQuote
+The database schema is fully normalized and enforced in PostgreSQL 17:
 
-A snapshot groups one complete input submission. Lane and transporter records are scoped to that snapshot. A quote references one lane and one transporter within the same snapshot. Enforce uniqueness and foreign-key constraints in PostgreSQL.
+1. **`dataset_snapshot`**:
+   - `id`: `BIGSERIAL PRIMARY KEY`
+   - `active`: `BOOLEAN NOT NULL DEFAULT FALSE` (indexed for active snapshot retrieval)
+   - `created_at`: `TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`
 
-A single active snapshot is maintained for the assignment's API contract because the assignment request contains no snapshot identifier. Input replacement must be transactional. The assignment use case must capture one active snapshot and read all its data consistently.
+2. **`lane`**:
+   - `id`: `BIGSERIAL PRIMARY KEY`
+   - `snapshot_id`: `BIGINT NOT NULL REFERENCES dataset_snapshot(id) ON DELETE CASCADE`
+   - `lane_id`: `BIGINT NOT NULL` (client lane ID)
+   - `origin`: `VARCHAR(255) NOT NULL`
+   - `destination`: `VARCHAR(255) NOT NULL`
+   - `UNIQUE(snapshot_id, lane_id)`
 
-## API contract
+3. **`transporter`**:
+   - `id`: `BIGSERIAL PRIMARY KEY`
+   - `snapshot_id`: `BIGINT NOT NULL REFERENCES dataset_snapshot(id) ON DELETE CASCADE`
+   - `transporter_id`: `BIGINT NOT NULL` (client transporter ID)
+   - `name`: `VARCHAR(255) NOT NULL`
+   - `UNIQUE(snapshot_id, transporter_id)`
 
-Preserve the assignment's required routes:
+4. **`lane_quote`**:
+   - `id`: `BIGSERIAL PRIMARY KEY`
+   - `snapshot_id`: `BIGINT NOT NULL REFERENCES dataset_snapshot(id) ON DELETE CASCADE`
+   - `lane_id`: `BIGINT NOT NULL`
+   - `transporter_id`: `BIGINT NOT NULL`
+   - `quote_amount`: `NUMERIC(15, 2) NOT NULL CHECK (quote_amount >= 0)`
+   - `UNIQUE(snapshot_id, lane_id, transporter_id)`
+   - Foreign key to `(snapshot_id, lane_id)` on `lane`
+   - Foreign key to `(snapshot_id, transporter_id)` on `transporter`
 
-- POST /api/v1/transporters/input
-- POST /api/v1/transporters/assignment
+### Concurrency & Snapshot Isolation
+Because the assignment endpoint `POST /api/v1/transporters/assignment` contains only `{"maxTransporters": N}` and does not pass a snapshot identifier, the system must guarantee snapshot consistency under concurrent operations:
 
-Do not invent extra required routes or alter required response fields. Any additive response fields must be checked against the assignment contract first.
+1. **Atomic Ingestion (`DatasetSnapshotService`)**:
+   - Each input submission is validated for internal consistency, cross-references, and non-negativity.
+   - All lanes, transporters, and quotes are persisted under a new `DatasetSnapshotEntity` with `active = false`.
+   - In the same database transaction, the previous active snapshot is deactivated, and the new snapshot is activated (`active = true`).
+2. **Snapshot-Isolated Assignment Read (`TransporterAssignmentService`)**:
+   - The assignment service loads the active snapshot ID at transaction start (`READ_COMMITTED` isolation).
+   - All subsequent reads for lanes, transporters, and quotes are strictly scoped to that captured `snapshotId`.
+   - Concurrent writes creating subsequent snapshots cannot corrupt or interleave with an ongoing assignment calculation.
 
-## Reliability
+---
 
-- Bean Validation for request shape and basic constraints.
-- Domain validation for cross-record constraints.
-- Global exception handler with stable error payloads.
-- PostgreSQL constraints as the final integrity guard.
-- Transaction boundaries around dataset activation and persistence.
-- Structured logs without credentials or sensitive data.
-- Health endpoint for deployment checks.
+## 4. API Error Handling Architecture
 
-## Deliberately excluded
+The application enforces a uniform, secure error structure via `GlobalExceptionHandler` (`@RestControllerAdvice`):
 
-No frontend, message broker, cache, AI service or microservice split unless a measured requirement justifies one.
+```json
+{
+  "status": "error",
+  "message": "Human-readable summary of the error",
+  "details": [
+    "Field-specific or constraint-specific descriptions"
+  ],
+  "timestamp": "2026-11-13T06:22:05.181878339Z"
+}
+```
+
+### HTTP Status Code Strategy
+- **`200 OK`**: Successful input ingestion or optimal assignment result.
+- **`400 Bad Request`**: Malformed JSON, Bean Validation constraint failures (e.g. `maxTransporters < 1`), duplicate IDs, or missing cross-references.
+- **`404 Not Found`**: Assignment requested before any dataset snapshot has been submitted.
+- **`422 Unprocessable Entity`**: Structurally valid dataset for which no valid complete assignment exists (infeasible optimization).
+- **`500 Internal Server Error`**: Unexpected system or database failures (sanitized; zero stack traces leaked).
+
+---
+
+## 5. Security & Reliability Posture
+
+- **Non-Root Docker Execution**: Runs as unprivileged `appuser` (UID/GID created in Alpine JRE stage).
+- **SQL Injection Prevention**: 100% parameterized queries via Spring Data JPA. Zero raw SQL string concatenation.
+- **Sanitized Logging**: Slf4j logs record entity counts and processing times; no sensitive credentials, secrets, or large payloads logged.
+- **Actuator Healthcheck**: `/actuator/health` provides continuous liveness and readiness monitoring.
